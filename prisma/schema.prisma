@@ -1,0 +1,307 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  EDITOR
+  REVIEWER
+  VIEWER
+}
+
+enum Visibility {
+  PRIVATE
+  TEAM
+  ORGANIZATION
+  PUBLIC
+}
+
+enum SkillStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  DEPRECATED
+  ARCHIVED
+}
+
+enum VersionStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  PUBLISHED
+}
+
+enum TestType {
+  STATIC
+  MODEL
+  REGRESSION
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  PASSED
+  FAILED
+}
+
+enum ResultStatus {
+  PASS
+  FAIL
+  ERROR
+  SKIPPED
+}
+
+enum ApprovalDecision {
+  APPROVE
+  REJECT
+  OVERRIDE
+}
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime     @default(now())
+  memberships  Membership[]
+  skillsOwned  Skill[]      @relation("SkillOwner")
+  orgsCreated  Organization[] @relation("OrgCreator")
+  versions     SkillVersion[]
+  approvals    Approval[]
+  evalRunsTriggered EvalRun[]
+  auditLogs    AuditLog[]
+}
+
+model Organization {
+  id        String       @id @default(cuid())
+  name      String
+  slug      String       @unique
+  createdAt DateTime     @default(now())
+  createdById String
+  createdBy User         @relation("OrgCreator", fields: [createdById], references: [id])
+  memberships Membership[]
+  skills    Skill[]
+  webhooks  Webhook[]
+  apiKeys   ApiKey[]
+  secrets   Secret[]
+  auditLogs AuditLog[]
+}
+
+model Membership {
+  id        String   @id @default(cuid())
+  orgId     String
+  userId    String
+  role      Role     @default(VIEWER)
+  createdAt DateTime @default(now())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, userId])
+}
+
+model Skill {
+  id               String       @id @default(cuid())
+  orgId            String
+  slug             String
+  name             String
+  description      String
+  ownerUserId      String
+  owner            User         @relation("SkillOwner", fields: [ownerUserId], references: [id])
+  visibility       Visibility   @default(TEAM)
+  status           SkillStatus  @default(DRAFT)
+  tags             String[]     @default([])
+  evalRuns         EvalRun[]
+  currentVersion   String?
+  currentVersionId String?
+  license          String?
+  exampleUsage     String?
+  forkedFromId     String?
+  forkedFrom       String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  org              Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  versions         SkillVersion[]
+  testCases        TestCase[]
+  releases         Release[]
+
+  @@unique([orgId, slug])
+  @@index([orgId, status])
+}
+
+model SkillVersion {
+  id            String        @id @default(cuid())
+  skillId       String
+  version       String
+  branch        String        @default("main")
+  status        VersionStatus @default(DRAFT)
+  changeSummary String
+  riskNotes     String?
+  createdById   String
+  createdBy     User          @relation(fields: [createdById], references: [id])
+  basedOnId     String?
+  basedOn       SkillVersion? @relation("VersionLineage", fields: [basedOnId], references: [id])
+  children      SkillVersion[] @relation("VersionLineage")
+  files         SkillFile[]
+  evalRuns      EvalRun[]
+  approvals     Approval[]
+  release       Release?
+  createdAt     DateTime      @default(now())
+  publishedAt   DateTime?
+  skill         Skill         @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([skillId, branch, version])
+  @@index([skillId, status])
+}
+
+model SkillFile {
+  id        String       @id @default(cuid())
+  versionId String
+  path      String
+  content   String
+  version   SkillVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@unique([versionId, path])
+}
+
+model TestCase {
+  id           String   @id @default(cuid())
+  skillId      String
+  name         String
+  type         TestType
+  modelTarget  String?
+  inputs       Json
+  expected     Json?
+  passCriteria String?
+  required     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  skill        Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  results      EvalResult[]
+}
+
+model EvalRun {
+  id            String     @id @default(cuid())
+  skillId       String
+  versionId     String
+  status        RunStatus  @default(PENDING)
+  overallPass   Boolean?
+  model         String
+  modelVersion  String?
+  latencyMs     Int?
+  tokensIn      Int?
+  tokensOut     Int?
+  costMicros    Int?
+  triggeredById String
+  triggeredBy   User         @relation(fields: [triggeredById], references: [id])
+  skill         Skill        @relation(fields: [skillId], references: [id])
+  results       EvalResult[]
+  createdAt     DateTime   @default(now())
+  version       SkillVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  release       Release?
+
+  @@index([versionId])
+}
+
+model EvalResult {
+  id         String       @id @default(cuid())
+  runId      String
+  testCaseId String?
+  name       String
+  type       TestType
+  status     ResultStatus
+  score      Float?
+  detail     String?
+  latencyMs  Int?
+  run        EvalRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  testCase   TestCase?    @relation(fields: [testCaseId], references: [id])
+}
+
+model Release {
+  id            String   @id @default(cuid())
+  skillId       String
+  versionId     String   @unique
+  version       String
+  changedFiles  String[] @default([])
+  evalRunId     String?  @unique
+  evalRun       EvalRun? @relation(fields: [evalRunId], references: [id])
+  approvedById  String?
+  publishedById String
+  notes         String?
+  createdAt     DateTime @default(now())
+  skill         Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  versionRef    SkillVersion @relation(fields: [versionId], references: [id])
+}
+
+model Approval {
+  id         String           @id @default(cuid())
+  versionId  String
+  reviewerId String
+  decision   ApprovalDecision
+  comment    String
+  createdAt  DateTime         @default(now())
+  version    SkillVersion     @relation(fields: [versionId], references: [id], onDelete: Cascade)
+  reviewer   User             @relation(fields: [reviewerId], references: [id])
+
+  @@index([versionId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  orgId      String
+  actorId    String?
+  actorEmail String?
+  action     String
+  targetType String
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  org        Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  actor      User?    @relation(fields: [actorId], references: [id])
+
+  @@index([orgId, createdAt])
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  orgId     String
+  url       String
+  events    String[] @default([])
+  secretEnc String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  org       Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  orgId       String
+  name        String
+  prefix      String   @unique
+  hash        String
+  createdById String
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([prefix])
+}
+
+model Secret {
+  id          String   @id @default(cuid())
+  orgId       String
+  name        String
+  ciphertext  String
+  iv          String
+  authTag     String
+  createdById String
+  createdAt   DateTime @default(now())
+  org         Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([orgId, name])
+}
