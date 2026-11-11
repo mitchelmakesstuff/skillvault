@@ -60,6 +60,25 @@ npm run build        # next build
 npm run db:stop      # stop embedded Postgres
 ```
 
+## Deploying to Vercel
+
+The app is Vercel-ready: `next build` succeeds without a local database, and the embedded Postgres is a devDependency used only by `scripts/dev-db.mjs`. What a cloud deploy **does** need is a hosted PostgreSQL and two environment variables.
+
+1. **Create a hosted Postgres** — Vercel Postgres, Neon, or Supabase all work. Copy the connection string.
+2. **Set environment variables** in your Vercel project (Settings → Environment Variables):
+   - `DATABASE_URL` — the hosted connection string (append `?sslmode=require` for Neon/Vercel Postgres).
+   - `APP_SECRET` — generate with `openssl rand -hex 32`. Required: it signs sessions, HMACs webhooks, and derives the secrets-encryption key.
+3. **Migrate and seed the hosted database** from your machine (one time):
+
+   ```bash
+   DATABASE_URL="<hosted-postgres-url>" npx prisma db push
+   DATABASE_URL="<hosted-postgres-url>" npm run db:seed
+   ```
+
+4. **Deploy** — import the repo in Vercel (or run `vercel --prod`). No custom build settings needed; `prisma generate` runs automatically on install.
+
+If the deploy fails, check in order: missing `APP_SECRET` (runtime 500s on every auth action), missing/localhost `DATABASE_URL` (Prisma connection errors), or a database that was never migrated ("table does not exist" errors on app pages).
+
 ---
 
 ## Architecture
